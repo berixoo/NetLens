@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
@@ -78,6 +79,9 @@ class ScanWorker(QThread):
         self.engine.scan_targets(self.targets, self.ports)
 
 
+_PROXY_TEST_SEMAPHORE = threading.Semaphore(8)  # max 8 concurrent connectivity tests
+
+
 class ProxyTestWorker(QThread):
     """Background thread for proxy connectivity testing — keeps UI responsive."""
     finished = Signal(object, bool)  # ScanResult, connectivity_ok
@@ -88,6 +92,7 @@ class ProxyTestWorker(QThread):
         self.timeout = timeout
 
     def run(self):
+        _PROXY_TEST_SEMAPHORE.acquire()
         try:
             detector = ProtocolDetector(timeout=self.timeout)
             ok = detector.test_proxy_connectivity(
@@ -95,6 +100,8 @@ class ProxyTestWorker(QThread):
             )
         except Exception:
             ok = False
+        finally:
+            _PROXY_TEST_SEMAPHORE.release()
         self.finished.emit(self.result, ok)
 
 
@@ -222,8 +229,7 @@ class SavedProxiesDialog(QDialog):
         self._connectivity[rec.address] = "测试中..."
         self._populate_table()
         # build a minimal ScanResult for the worker
-        from src.core.protocol import ProxyType as PT
-        ptype = {"HTTP": PT.HTTP, "SOCKS4": PT.SOCKS4, "SOCKS5": PT.SOCKS5}.get(rec.proxy_type, PT.NONE)
+        ptype = {"HTTP": ProxyType.HTTP, "SOCKS4": ProxyType.SOCKS4, "SOCKS5": ProxyType.SOCKS5}.get(rec.proxy_type, ProxyType.NONE)
         result = ScanResult(ip=rec.ip, port=rec.port, is_open=True, proxy_type=ptype)
         worker = ProxyTestWorker(result, self._timeout)
         worker.finished.connect(self._on_test_done)
@@ -827,7 +833,6 @@ class MainWindow(QMainWindow):
         self._btn_campus_scan.setEnabled(False)
         self._btn_stop.setEnabled(True)
         self._status.showMessage("扫描中...")
-        self._reporter.start_timer()
         self._scan_start = datetime.now().timestamp()
 
         self._worker.start()
@@ -857,7 +862,8 @@ class MainWindow(QMainWindow):
 
     def _on_result(self, result: ScanResult):
         self._results.append(result)
-        self._add_table_row(result)
+        if result.is_open:
+            self._add_table_row(result)
 
     def _on_progress(self, done: int, total: int):
         self._progress.setValue(done)

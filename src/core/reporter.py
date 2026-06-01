@@ -55,12 +55,6 @@ class ReportSummary:
 class ReportGenerator:
     """Generate reports and assess risk for scan results."""
 
-    def __init__(self):
-        self._start_time: float = 0.0
-
-    def start_timer(self):
-        self._start_time = datetime.now().timestamp()
-
     # -- risk assessment -------------------------------------------
 
     @staticmethod

@@ -130,14 +130,14 @@ class ScannerEngine:
     def stop(self):
         with self._lock:
             self._state = ScanState.STOPPED
-        self._cancel_event.set()
+            self._cancel_event.set()
 
     def reset(self):
         with self._lock:
             self._results.clear()
             self._alive_hosts.clear()
             self._state = ScanState.IDLE
-        self._cancel_event.clear()
+            self._cancel_event.clear()
 
     # -- scanning: high level ---------------------------------------
 
@@ -175,7 +175,7 @@ class ScannerEngine:
 
         with self._lock:
             self._state = ScanState.DISCOVERING
-        self._cancel_event.clear()
+            self._cancel_event.clear()
 
         # build tasks: each target × discovery_ports
         tasks = [(ip, port) for ip in targets for port in ports]
@@ -225,7 +225,7 @@ class ScannerEngine:
             self._state = ScanState.DISCOVERING
             self._results.clear()
             self._alive_hosts.clear()
-        self._cancel_event.clear()
+            self._cancel_event.clear()
 
         # discovery: probe all targets on a few ports
         disc_ports = self.config.discovery_ports
@@ -293,7 +293,7 @@ class ScannerEngine:
                 self._state = ScanState.SCANNING
             if phase == "scan":
                 self._results.clear()
-        self._cancel_event.clear()
+            self._cancel_event.clear()
 
         completed = 0
         futures = {}

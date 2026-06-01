@@ -39,6 +39,10 @@ def parse_ip_range(input_str: str) -> list[str]:
 
             # short form: 192.168.1.1-100
             if right.isdigit():
+                try:
+                    ipaddress.IPv4Address(left)
+                except (ValueError, ipaddress.AddressValueError):
+                    continue
                 base = ".".join(left.split(".")[:3])
                 start = int(left.split(".")[-1])
                 end = int(right)
