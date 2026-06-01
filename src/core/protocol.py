@@ -134,32 +134,21 @@ class ProtocolDetector:
     # -- internal: combined banner + HTTP probe ---------------------
 
     def _grab_banner_and_http(self, ip: str, port: int, result: ProxyResult):
-        """Grab banner and try HTTP CONNECT in a single connection where possible."""
+        """Grab banner only (for display). Proxy detection is done separately via CONNECT."""
         try:
             with socket.create_connection((ip, port), timeout=self.timeout) as sock:
                 sock.settimeout(min(self.timeout, 1.5))
-                start = time.monotonic()
-
-                # send HEAD to grab banner
                 try:
                     sock.sendall(b"HEAD / HTTP/1.0\r\nHost: test\r\n\r\n")
                     data = sock.recv(1024)
                     banner = data.decode("utf-8", errors="replace")
                     result.banner = banner.split("\r\n")[0][:200]
-
-                    # if banner looks like an HTTP response, it might be a proxy
-                    if banner.startswith("HTTP/"):
-                        status = _parse_http_status(banner)
-                        if status == 200:
-                            result.proxy_type = ProxyType.HTTP
-                            result.latency_ms = round((time.monotonic() - start) * 1000, 2)
-                            return
                 except OSError:
                     pass
         except OSError:
             return
 
-        # separate connection: try HTTP CONNECT
+        # try HTTP CONNECT — this is the real proxy detection
         self._try_http_connect(ip, port, result)
 
     # -- internal: HTTP CONNECT detection ---------------------------

@@ -24,7 +24,7 @@ class ScanState(Enum):
 class ScanConfig:
     ports: list[int] = field(default_factory=lambda: [7890, 7891, 1080, 10808, 10809, 8080, 8118, 3128])
     # ports used for the fast host-alive discovery phase (should NOT overlap with `ports`)
-    discovery_ports: list[int] = field(default_factory=lambda: [443, 80, 22, 8080])
+    discovery_ports: list[int] = field(default_factory=lambda: [443, 80, 22, 445])
     timeout: float = 3.0
     discovery_timeout: float = 1.0          # shorter timeout for discovery
     max_threads: int = 64
@@ -48,6 +48,7 @@ class ScanResult:
     requires_auth: bool = False
     banner: str = ""
     connectivity_ok: bool = False
+    connectivity_tested: bool = False
     timestamp: float = field(default_factory=time.time)
     error: str = ""
     phase: str = ""          # "discovery" or "scan"
@@ -331,6 +332,8 @@ class ScannerEngine:
                     with self._lock:
                         self._results.append(err_result)
                     completed += 1
+                    if self._on_progress:
+                        self._on_progress(completed, total)
 
         self._executor = None
         self._finish()
@@ -379,5 +382,6 @@ class ScannerEngine:
                 )
             except Exception:
                 result.connectivity_ok = False
+            result.connectivity_tested = True
 
         return result

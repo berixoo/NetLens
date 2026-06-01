@@ -1,12 +1,29 @@
 """Windows system proxy switcher — enable/disable via registry + wininet notification."""
 from __future__ import annotations
 
-import ctypes
 import logging
+import platform
 import re
-import winreg
 from dataclasses import dataclass
 from typing import Optional
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+if _IS_WINDOWS:
+    import ctypes
+    import winreg
+else:
+    # stubs for non-Windows platforms — all operations return False/empty
+    class _StubWinreg:
+        HKEY_CURRENT_USER = 0
+        KEY_READ = 0
+        KEY_WRITE = 0
+        REG_DWORD = 0
+        REG_SZ = 0
+        def OpenKey(self, *a, **kw): raise OSError("Windows only")
+        def QueryValueEx(self, *a, **kw): raise OSError("Windows only")
+        def SetValueEx(self, *a, **kw): raise OSError("Windows only")
+    winreg = _StubWinreg()
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +44,8 @@ class ProxyStatus:
 
 def _notify_system() -> None:
     """Broadcast proxy change so other apps pick it up immediately."""
+    if not _IS_WINDOWS:
+        return
     try:
         ctypes.windll.wininet.InternetSetOptionW(0, _INTERNET_OPTION_SETTINGS_CHANGED, 0, 0)
         ctypes.windll.wininet.InternetSetOptionW(0, _INTERNET_OPTION_REFRESH, 0, 0)

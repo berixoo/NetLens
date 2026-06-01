@@ -50,7 +50,8 @@ def parse_ip_range(input_str: str) -> list[str]:
             try:
                 start_ip = int(ipaddress.IPv4Address(left))
                 end_ip = int(ipaddress.IPv4Address(right))
-                for ip_int in range(start_ip, end_ip + 1):
+                count = min(end_ip - start_ip + 1, 65536)
+                for ip_int in range(start_ip, start_ip + count):
                     results.append(str(ipaddress.IPv4Address(ip_int)))
             except (ValueError, ipaddress.AddressValueError):
                 pass

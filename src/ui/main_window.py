@@ -377,7 +377,7 @@ class ScanSummaryDialog(QDialog):
                 f"{r.latency_ms:.0f}ms" if r.latency_ms else "-",
                 "是" if r.requires_auth else "",
                 "是" if r.connectivity_ok else "",
-                "可达" if r.connectivity_ok else "未验证" if not r.connectivity_ok else "不可达",
+                "可达" if r.connectivity_ok else ("不可达" if r.connectivity_tested else "未验证"),
                 risk.label,
             ]
             for col, text in enumerate(items):
@@ -387,6 +387,8 @@ class ScanSummaryDialog(QDialog):
                 if col == 5:
                     if r.connectivity_ok:
                         item.setForeground(QColor("#a6e3a1"))
+                    elif r.connectivity_tested:
+                        item.setForeground(QColor("#f38ba8"))
                 if col == 6:
                     item.setForeground(QColor(risk.color_hex))
                     item.setFont(QFont("", -1, QFont.Bold))
@@ -946,6 +948,7 @@ class MainWindow(QMainWindow):
     def _on_connectivity_test_done(self, result: ScanResult, ok: bool):
         """Called when background connectivity test finishes — just update, no popup."""
         result.connectivity_ok = ok
+        result.connectivity_tested = True
         if ok:
             self._log(f"    代理已验证: 流量转发成功 (已保存到记忆)")
         else:
@@ -1019,9 +1022,6 @@ class MainWindow(QMainWindow):
 
     def _show_scan_summary_dialog(self):
         """Show summary dialog with all found proxies after scan completes."""
-        # wait for any pending connectivity tests to finish
-        for w in self._test_workers:
-            w.wait(5000)
         dlg = ScanSummaryDialog(self._found_proxies, self)
         dlg.exec()
         if dlg.chosen:
@@ -1148,11 +1148,11 @@ class MainWindow(QMainWindow):
     # ── Close ────────────────────────────────────────────────────
 
     def closeEvent(self, event):
+        self.hide()  # hide window immediately for responsive feel
         if self._worker and self._worker.isRunning():
             self._engine.stop()
-            self._worker.wait(8000)
-            # don't use terminate() — it's unsafe; let thread finish naturally
-        # stop any background test workers
+            self._worker.wait(10000)
         for w in self._test_workers:
-            w.wait(1000)
+            w.wait(2000)
+        self._logger.close()
         event.accept()

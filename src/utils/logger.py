@@ -29,7 +29,9 @@ class ScanLogger:
         self._fh.setFormatter(logging.Formatter(
             "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
         ))
-        self._logger.addHandler(self._fh)
+        # avoid duplicate handlers if ScanLogger is instantiated multiple times
+        if not any(isinstance(h, logging.FileHandler) for h in self._logger.handlers):
+            self._logger.addHandler(self._fh)
 
         # in-memory buffer for UI display
         self._buffer: list[str] = []
@@ -67,3 +69,11 @@ class ScanLogger:
     def clear_buffer(self):
         with self._lock:
             self._buffer.clear()
+
+    def close(self):
+        """Flush and close the file handler."""
+        try:
+            self._fh.close()
+            self._logger.removeHandler(self._fh)
+        except Exception:
+            pass
