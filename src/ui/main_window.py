@@ -159,40 +159,51 @@ class ProxyTestDialog(QDialog):
 # ─── Saved Proxies Dialog ────────────────────────────────────────
 
 class SavedProxiesDialog(QDialog):
-    """Show saved proxy records, allow quick apply or delete."""
+    """Show saved proxy records, allow quick apply, re-test, or delete."""
 
-    def __init__(self, memory: ProxyMemory, parent=None):
+    def __init__(self, memory: ProxyMemory, timeout: float = 3.0, parent=None):
         super().__init__(parent)
         self.setWindowTitle("已保存代理")
-        self.setMinimumSize(560, 380)
+        self.setMinimumSize(640, 400)
         self.memory = memory
-        self.selected_address: str | None = None
+        self._timeout = timeout
+        self._test_workers: list[ProxyTestWorker] = []
 
         layout = QVBoxLayout(self)
 
         # info label
-        count = len(memory.records)
-        layout.addWidget(QLabel(f"共 {count} 条记录，按最近发现时间排序。"))
+        self._info_label = QLabel(f"共 {len(memory.records)} 条记录")
+        layout.addWidget(self._info_label)
 
-        # table
+        # table — 8 columns: address, type, latency, auth, use_count, last_seen, status, action
         self._table = QTableWidget()
-        self._table.setColumnCount(7)
+        self._table.setColumnCount(8)
         self._table.setHorizontalHeaderLabels([
-            "地址", "类型", "延迟", "需认证", "使用次数", "最后发现", "操作"
+            "地址", "类型", "延迟", "需认证", "使用次数", "最后发现", "连通性", "操作"
         ])
         header = self._table.horizontalHeader()
         header.setStretchLastSection(True)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self._table)
 
+        self._records = memory.records  # snapshot for stable indexing
+        self._connectivity: dict[str, str] = {}  # "ip:port" -> status text
         self._populate_table()
 
         # bottom buttons
         btn_row = QHBoxLayout()
+
+        btn_retest = QPushButton("重新测试连通性")
+        btn_retest.clicked.connect(self._retest_selected)
+        btn_row.addWidget(btn_retest)
+
+        btn_retest_all = QPushButton("测试全部")
+        btn_retest_all.clicked.connect(self._retest_all)
+        btn_row.addWidget(btn_retest_all)
 
         btn_apply = QPushButton("应用选中代理到系统")
         btn_apply.setObjectName("proxyOnBtn")
@@ -208,10 +219,6 @@ class SavedProxiesDialog(QDialog):
         btn_delete.clicked.connect(self._delete_selected)
         btn_row.addWidget(btn_delete)
 
-        btn_clear = QPushButton("清空全部")
-        btn_clear.clicked.connect(self._clear_all)
-        btn_row.addWidget(btn_clear)
-
         btn_close = QPushButton("关闭")
         btn_close.clicked.connect(self.accept)
         btn_row.addWidget(btn_close)
@@ -219,15 +226,15 @@ class SavedProxiesDialog(QDialog):
         layout.addLayout(btn_row)
 
     def _populate_table(self):
-        records = self.memory.records
-        self._table.setRowCount(len(records))
-        for row, rec in enumerate(records):
-            # format last_seen
+        self._records = self.memory.records
+        self._table.setRowCount(len(self._records))
+        for row, rec in enumerate(self._records):
             try:
                 last = datetime.fromtimestamp(rec.last_seen).strftime("%m-%d %H:%M")
             except (ValueError, OSError):
                 last = "-"
 
+            status_text = self._connectivity.get(rec.address, "未测试")
             items = [
                 rec.address,
                 rec.proxy_type or "-",
@@ -235,26 +242,60 @@ class SavedProxiesDialog(QDialog):
                 "是" if rec.requires_auth else "",
                 str(rec.use_count),
                 last,
-                "",  # placeholder for action column
+                status_text,
+                "",
             ]
             for col, text in enumerate(items):
                 item = QTableWidgetItem(text)
+                if col == 6:
+                    if "可达" in text:
+                        item.setForeground(QColor("#a6e3a1"))
+                    elif "不可达" in text:
+                        item.setForeground(QColor("#f38ba8"))
                 self._table.setItem(row, col, item)
 
-            # add a small "apply" button in the last column
             btn = QPushButton("使用")
             btn.setFixedHeight(24)
             btn.clicked.connect(lambda checked, r=rec: self._quick_apply(r))
-            self._table.setCellWidget(row, 6, btn)
+            self._table.setCellWidget(row, 7, btn)
 
     def _get_selected_record(self) -> ProxyRecord | None:
         row = self._table.currentRow()
-        if row < 0:
+        if row < 0 or row >= len(self._records):
             return None
-        records = self.memory.records
-        if row < len(records):
-            return records[row]
-        return None
+        return self._records[row]
+
+    def _retest_selected(self):
+        rec = self._get_selected_record()
+        if not rec:
+            QMessageBox.information(self, "提示", "请先选中一条记录。")
+            return
+        self._start_test(rec)
+
+    def _retest_all(self):
+        for rec in self._records:
+            self._start_test(rec)
+
+    def _start_test(self, rec: ProxyRecord):
+        self._connectivity[rec.address] = "测试中..."
+        self._populate_table()
+        # build a minimal ScanResult for the worker
+        from src.core.protocol import ProxyType as PT
+        ptype = {"HTTP": PT.HTTP, "SOCKS4": PT.SOCKS4, "SOCKS5": PT.SOCKS5}.get(rec.proxy_type, PT.NONE)
+        result = ScanResult(ip=rec.ip, port=rec.port, is_open=True, proxy_type=ptype)
+        worker = ProxyTestWorker(result, self._timeout)
+        worker.finished.connect(self._on_test_done)
+        self._test_workers.append(worker)
+        worker.start()
+
+    def _on_test_done(self, result: ScanResult, ok: bool):
+        addr = f"{result.ip}:{result.port}"
+        if ok:
+            self._connectivity[addr] = "可达"
+        else:
+            self._connectivity[addr] = "不可达"
+        self._populate_table()
+        self._test_workers = [w for w in self._test_workers if w.isRunning()]
 
     def _apply_selected(self):
         rec = self._get_selected_record()
@@ -286,10 +327,109 @@ class SavedProxiesDialog(QDialog):
         self.memory.remove(rec.ip, rec.port)
         self._populate_table()
 
-    def _clear_all(self):
-        if QMessageBox.question(self, "确认", "确定要清空所有已保存的代理记录吗?") == QMessageBox.Yes:
-            self.memory.clear()
-            self._populate_table()
+    def closeEvent(self, event):
+        for w in self._test_workers:
+            w.wait(1000)
+        event.accept()
+
+
+# ─── Scan Summary Dialog ─────────────────────────────────────────
+
+class ScanSummaryDialog(QDialog):
+    """Shown after scan completes — lists all found proxies, user picks one to use."""
+
+    def __init__(self, results: list[ScanResult], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("扫描完成 — 发现的代理")
+        self.setMinimumSize(600, 380)
+        self.results = results
+        self.chosen: ScanResult | None = None
+
+        layout = QVBoxLayout(self)
+
+        count = len(results)
+        verified = sum(1 for r in results if r.connectivity_ok)
+        layout.addWidget(QLabel(
+            f"共发现 {count} 个代理，其中 {verified} 个已验证可达。"
+        ))
+
+        # table
+        self._table = QTableWidget()
+        self._table.setColumnCount(7)
+        self._table.setHorizontalHeaderLabels([
+            "地址", "类型", "延迟", "需认证", "已验证", "连通性", "风险"
+        ])
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self._table)
+
+        for row, r in enumerate(results):
+            self._table.insertRow(row)
+            risk = ReportGenerator.assess_risk(r)
+            items = [
+                f"{r.ip}:{r.port}",
+                r.proxy_type.display_name(),
+                f"{r.latency_ms:.0f}ms" if r.latency_ms else "-",
+                "是" if r.requires_auth else "",
+                "是" if r.connectivity_ok else "",
+                "可达" if r.connectivity_ok else "未验证" if not r.connectivity_ok else "不可达",
+                risk.label,
+            ]
+            for col, text in enumerate(items):
+                item = QTableWidgetItem(text)
+                if col == 4:
+                    item.setForeground(QColor("#a6e3a1") if r.connectivity_ok else QColor("#6c7086"))
+                if col == 5:
+                    if r.connectivity_ok:
+                        item.setForeground(QColor("#a6e3a1"))
+                if col == 6:
+                    item.setForeground(QColor(risk.color_hex))
+                    item.setFont(QFont("", -1, QFont.Bold))
+                self._table.setItem(row, col, item)
+
+        # buttons
+        btn_row = QHBoxLayout()
+
+        btn_use = QPushButton("使用选中代理")
+        btn_use.setObjectName("proxyOnBtn")
+        btn_use.clicked.connect(self._use_selected)
+        btn_row.addWidget(btn_use)
+
+        btn_copy = QPushButton("复制地址")
+        btn_copy.clicked.connect(self._copy_selected)
+        btn_row.addWidget(btn_copy)
+
+        btn_skip = QPushButton("跳过")
+        btn_skip.clicked.connect(self.accept)
+        btn_row.addWidget(btn_skip)
+
+        layout.addLayout(btn_row)
+
+    def _use_selected(self):
+        row = self._table.currentRow()
+        if row < 0 or row >= len(self.results):
+            QMessageBox.information(self, "提示", "请先选中一个代理。")
+            return
+        self.chosen = self.results[row]
+        addr = f"{self.chosen.ip}:{self.chosen.port}"
+        ok = set_proxy(addr)
+        if ok:
+            QMessageBox.information(self, "已应用", f"系统代理已设置为:\n{addr}")
+        else:
+            QMessageBox.warning(self, "失败", "设置系统代理失败，请以管理员身份运行。")
+        self.accept()
+
+    def _copy_selected(self):
+        row = self._table.currentRow()
+        if 0 <= row < len(self.results):
+            r = self.results[row]
+            QApplication.clipboard().setText(f"{r.ip}:{r.port}")
+            QMessageBox.information(self, "已复制", f"已复制: {r.ip}:{r.port}")
 
 
 # ─── Main Window ─────────────────────────────────────────────────
@@ -304,7 +444,8 @@ class MainWindow(QMainWindow):
         self._logger = ScanLogger()
         self._reporter = ReportGenerator()
         self._memory = ProxyMemory()
-        self._test_workers: list[ProxyTestWorker] = []  # prevent GC of background test threads
+        self._test_workers: list[ProxyTestWorker] = []
+        self._found_proxies: list[ScanResult] = []  # proxies found during current scan
         self._worker: ScanWorker | None = None
         self._results: list[ScanResult] = []
         self._scan_start: float = 0.0
@@ -709,6 +850,7 @@ class MainWindow(QMainWindow):
         )
         self._engine = ScannerEngine(config)
         self._results.clear()
+        self._found_proxies.clear()
         self._alive_count = 0
         self._current_phase = ""
         self._table.setRowCount(0)
@@ -790,6 +932,7 @@ class MainWindow(QMainWindow):
             latency_ms=result.latency_ms,
             requires_auth=result.requires_auth,
         )
+        self._found_proxies.append(result)
 
         # run connectivity test in background thread to avoid blocking UI
         if not result.connectivity_ok and result.proxy_type not in (ProxyType.NONE, ProxyType.UNKNOWN):
@@ -801,35 +944,13 @@ class MainWindow(QMainWindow):
             self._log(f"    已保存到记忆")
 
     def _on_connectivity_test_done(self, result: ScanResult, ok: bool):
-        """Called when background connectivity test finishes."""
+        """Called when background connectivity test finishes — just update, no popup."""
         result.connectivity_ok = ok
         if ok:
             self._log(f"    代理已验证: 流量转发成功 (已保存到记忆)")
-            # only show dialog if engine is not stopped (user didn't already pick one)
-            if self._engine.state != ScanState.STOPPED:
-                self._show_proxy_dialog(result)
         else:
             self._log(f"    代理未通过验证 (已保存到记忆)")
-        # clean up finished workers
         self._test_workers = [w for w in self._test_workers if w.isRunning()]
-
-    def _show_proxy_dialog(self, result: ScanResult):
-        dlg = ProxyTestDialog(result, self)
-        dlg.exec()
-        if dlg.use_proxy:
-            self._log(f"用户选择使用代理: {result.ip}:{result.port}")
-            self._engine.stop()
-            self._memory.mark_used(result.ip, result.port)
-            addr = f"{result.ip}:{result.port}"
-            ok = set_proxy(addr)
-            if ok:
-                self._log(f"  系统代理已设置为 {addr}")
-                self._status.showMessage(f"系统代理 -> {addr} ({result.proxy_type.display_name()})")
-            else:
-                self._log(f"  设置系统代理失败 (需要管理员权限?)")
-                self._status.showMessage(f"代理设置失败 -- 请检查权限")
-            self._refresh_proxy_status()
-            QApplication.clipboard().setText(addr)
 
     def _apply_selected_proxy(self):
         row = self._table.currentRow()
@@ -875,7 +996,7 @@ class MainWindow(QMainWindow):
         if not self._memory.records:
             QMessageBox.information(self, "已保存代理", "暂无已保存的代理记录。\n扫描发现的代理会自动保存。")
             return
-        dlg = SavedProxiesDialog(self._memory, self)
+        dlg = SavedProxiesDialog(self._memory, timeout=self._timeout_spin.value(), parent=self)
         dlg.exec()
         self._refresh_proxy_status()
 
@@ -890,6 +1011,23 @@ class MainWindow(QMainWindow):
 
         summary = self._reporter.summarize(self._results, duration)
         self._show_summary(summary)
+
+        # show proxy summary dialog if any proxies were found
+        if self._found_proxies:
+            self._log(f"发现 {len(self._found_proxies)} 个代理，弹出汇总选择窗口")
+            QTimer.singleShot(300, self._show_scan_summary_dialog)
+
+    def _show_scan_summary_dialog(self):
+        """Show summary dialog with all found proxies after scan completes."""
+        # wait for any pending connectivity tests to finish
+        for w in self._test_workers:
+            w.wait(5000)
+        dlg = ScanSummaryDialog(self._found_proxies, self)
+        dlg.exec()
+        if dlg.chosen:
+            r = dlg.chosen
+            self._memory.mark_used(r.ip, r.port)
+            self._refresh_proxy_status()
 
     def _show_summary(self, summary):
         lines = [
