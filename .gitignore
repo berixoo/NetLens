@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+logs/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+proxy_memory.json
