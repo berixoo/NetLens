@@ -7,9 +7,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable, Generator, Optional
+from typing import Callable, Optional
 
-from .protocol import ProtocolDetector, ProxyResult, ProxyType
+from .protocol import ProtocolDetector, ProxyType
 
 
 class ScanState(Enum):

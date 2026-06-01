@@ -1,33 +1,28 @@
 """Main application window for NetLens — campus-scale proxy scanner."""
 from __future__ import annotations
 
-import html
 import os
 import sys
-import threading
-from collections import deque
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QTextCursor
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtGui import QColor, QFont, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QGroupBox, QLabel, QLineEdit, QTextEdit, QSpinBox,
     QDoubleSpinBox, QCheckBox, QPushButton, QTableWidget, QTableWidgetItem,
-    QHeaderView, QProgressBar, QFileDialog, QMessageBox, QSplitter,
-    QTabWidget, QComboBox, QDialog, QDialogButtonBox, QPlainTextEdit,
-    QStatusBar, QToolButton, QSizePolicy
+    QHeaderView, QProgressBar, QFileDialog, QMessageBox,
+    QTabWidget, QComboBox, QDialog, QPlainTextEdit, QStatusBar
 )
 
-from ..core.scanner import ScannerEngine, ScanConfig, ScanResult, ScanState
+from ..core.scanner import ScannerEngine, ScanConfig, ScanResult
 from ..core.protocol import ProxyType, ProtocolDetector
 from ..core.reporter import ReportGenerator, RiskLevel
 from ..utils.network import (
-    parse_ip_range, get_local_subnet, ip_range_count,
-    get_local_network_info, get_campus_scan_targets, expand_cidr, cidr_host_count
+    parse_ip_range, get_local_subnet, ip_range_count, get_local_network_info
 )
 from ..utils.logger import ScanLogger
-from ..utils.proxy_switch import get_proxy_status, set_proxy, disable_proxy, ProxyStatus
+from ..utils.proxy_switch import get_proxy_status, set_proxy, disable_proxy
 from ..utils.proxy_memory import ProxyMemory, ProxyRecord
 
 
@@ -101,59 +96,6 @@ class ProxyTestWorker(QThread):
         except Exception:
             ok = False
         self.finished.emit(self.result, ok)
-
-
-# ─── Proxy test dialog ──────────────────────────────────────────
-
-class ProxyTestDialog(QDialog):
-    """Shown when a working proxy is found; asks user whether to use it."""
-
-    def __init__(self, result: ScanResult, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("发现代理!")
-        self.setMinimumWidth(420)
-        self.result = result
-        self.use_proxy = False
-
-        layout = QVBoxLayout(self)
-
-        safe_ip = html.escape(result.ip)
-        info = QLabel(
-            f"<b style='color:#00AA00;font-size:14px'>发现可用代理</b><br><br>"
-            f"<b>地址:</b> {safe_ip}:{result.port}<br>"
-            f"<b>类型:</b> {result.proxy_type.display_name()}<br>"
-            f"<b>延迟:</b> {result.latency_ms} ms<br>"
-            f"<b>需要认证:</b> {'是' if result.requires_auth else '否'}<br>"
-            f"<b>已验证:</b> {'是 — 流量转发成功' if result.connectivity_ok else '未测试'}"
-        )
-        info.setWordWrap(True)
-        layout.addWidget(info)
-
-        layout.addWidget(QLabel("是否使用此代理?"))
-
-        btn_box = QDialogButtonBox()
-        btn_use = btn_box.addButton("使用此代理 (设为系统代理)", QDialogButtonBox.AcceptRole)
-        btn_skip = btn_box.addButton("跳过并继续扫描", QDialogButtonBox.RejectRole)
-        btn_copy = btn_box.addButton("复制到剪贴板", QDialogButtonBox.ActionRole)
-
-        btn_use.clicked.connect(self._on_use)
-        btn_skip.clicked.connect(self._on_skip)
-        btn_copy.clicked.connect(self._on_copy)
-
-        layout.addWidget(btn_box)
-
-    def _on_use(self):
-        self.use_proxy = True
-        self.accept()
-
-    def _on_skip(self):
-        self.use_proxy = False
-        self.accept()
-
-    def _on_copy(self):
-        addr = f"{self.result.ip}:{self.result.port}"
-        QApplication.clipboard().setText(addr)
-        QMessageBox.information(self, "已复制", f"已复制: {addr}")
 
 
 # ─── Saved Proxies Dialog ────────────────────────────────────────

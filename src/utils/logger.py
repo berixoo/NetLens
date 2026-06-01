@@ -5,7 +5,6 @@ import logging
 import os
 import threading
 from datetime import datetime
-from typing import Optional
 
 
 class ScanLogger:

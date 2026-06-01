@@ -5,7 +5,6 @@ import logging
 import platform
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 _IS_WINDOWS = platform.system() == "Windows"
 
