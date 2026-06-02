@@ -1,4 +1,12 @@
-"""Main application window for NetLens — campus-scale proxy scanner."""
+"""NetLens 主窗口模块。
+
+包含以下 UI 组件：
+  - ScanWorker: 扫描工作线程，将扫描引擎的回调转发为 Qt 信号
+  - ProxyTestWorker: 代理连通性测试工作线程（后台执行，不阻塞 UI）
+  - SavedProxiesDialog: 已保存代理管理对话框（查看、测试、应用、删除）
+  - ScanSummaryDialog: 扫描完成后的代理汇总选择对话框
+  - MainWindow: 主窗口，包含所有 UI 控件和业务逻辑
+"""
 from __future__ import annotations
 
 import os
@@ -27,17 +35,22 @@ from ..utils.proxy_switch import get_proxy_status, set_proxy, disable_proxy
 from ..utils.proxy_memory import ProxyMemory, ProxyRecord
 
 
-# ─── Worker thread ───────────────────────────────────────────────
+# ─── 扫描工作线程 ──────────────────────────────────────────────────
 
 class ScanWorker(QThread):
-    """Background thread that runs the scanner engine with two-phase support."""
-    result_ready = Signal(object)       # ScanResult
-    progress = Signal(int, int)         # completed, total
-    proxy_found = Signal(object)        # ScanResult
-    finished_signal = Signal()
-    log_message = Signal(str)
-    phase_change = Signal(str)          # "discovery" or "scan"
-    alive_found = Signal(str)           # IP of alive host
+    """扫描工作线程：在后台执行扫描引擎，并通过 Qt 信号将结果通知 UI 线程。
+
+    扫描引擎的回调函数在工作线程中被调用，通过 emit Qt 信号将数据传递到主线程。
+    Qt 的 AutoConnection 机制会自动将跨线程信号转为 QueuedConnection，
+    确保槽函数在主线程中执行，从而安全地更新 UI。
+    """
+    result_ready = Signal(object)       # 单个扫描结果 (ScanResult)
+    progress = Signal(int, int)         # 进度更新 (已完成数, 总数)
+    proxy_found = Signal(object)        # 发现代理 (ScanResult)
+    finished_signal = Signal()          # 扫描完成信号
+    log_message = Signal(str)           # 日志消息（显示在 UI 日志面板）
+    phase_change = Signal(str)          # 阶段切换 ("discovery" 或 "scan")
+    alive_found = Signal(str)           # 发现存活主机 (IP 地址)
 
     def __init__(self, engine: ScannerEngine, targets: list[str], ports: list[int]):
         super().__init__()
@@ -79,12 +92,18 @@ class ScanWorker(QThread):
         self.engine.scan_targets(self.targets, self.ports)
 
 
-_PROXY_TEST_SEMAPHORE = threading.Semaphore(8)  # max 8 concurrent connectivity tests
+# 代理连通性测试的并发信号量，限制同时进行的测试数量
+# 防止大量代理同时测试时耗尽系统临时端口或网络资源
+_PROXY_TEST_SEMAPHORE = threading.Semaphore(8)
 
 
 class ProxyTestWorker(QThread):
-    """Background thread for proxy connectivity testing — keeps UI responsive."""
-    finished = Signal(object, bool)  # ScanResult, connectivity_ok
+    """代理连通性测试工作线程。
+
+    在后台线程中通过代理实际发送 HTTP 请求，验证代理是否可用。
+    使用信号量限制并发数，避免同时创建过多 socket 连接。
+    """
+    finished = Signal(object, bool)  # 测试完成信号 (ScanResult, 是否可达)
 
     def __init__(self, result: ScanResult, timeout: float):
         super().__init__()
@@ -105,10 +124,17 @@ class ProxyTestWorker(QThread):
         self.finished.emit(self.result, ok)
 
 
-# ─── Saved Proxies Dialog ────────────────────────────────────────
+# ─── 已保存代理对话框 ─────────────────────────────────────────────
 
 class SavedProxiesDialog(QDialog):
-    """Show saved proxy records, allow quick apply, re-test, or delete."""
+    """已保存代理管理对话框。
+
+    功能：
+    - 查看所有已保存的代理记录（地址、类型、延迟、使用次数等）
+    - 对单个或全部代理重新进行连通性测试
+    - 一键将选中的代理应用为系统代理
+    - 删除不需要的记录
+    """
 
     def __init__(self, memory: ProxyMemory, timeout: float = 3.0, parent=None):
         super().__init__(parent)
@@ -281,10 +307,15 @@ class SavedProxiesDialog(QDialog):
         event.accept()
 
 
-# ─── Scan Summary Dialog ─────────────────────────────────────────
+# ─── 扫描汇总对话框 ──────────────────────────────────────────────
 
 class ScanSummaryDialog(QDialog):
-    """Shown after scan completes — lists all found proxies, user picks one to use."""
+    """扫描完成后的代理汇总选择对话框。
+
+    在扫描结束后自动弹出，以表格形式展示所有发现的代理，
+    包括地址、类型、延迟、连通性状态和风险等级。
+    用户可以选择一个代理直接应用为系统代理。
+    """
 
     def __init__(self, results: list[ScanResult], parent=None):
         super().__init__(parent)
@@ -382,9 +413,19 @@ class ScanSummaryDialog(QDialog):
             QMessageBox.information(self, "已复制", f"已复制: {r.ip}:{r.port}")
 
 
-# ─── Main Window ─────────────────────────────────────────────────
+# ─── 主窗口 ──────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
+    """NetLens 主窗口。
+
+    包含以下功能区域：
+    - 扫描目标输入区：手动输入 IP / 导入文件 / 选择本机子网或校园网段
+    - 扫描配置区：端口、线程数、超时、协议检测、两阶段扫描等选项
+    - 系统代理状态栏：显示当前代理状态，提供应用/关闭/刷新按钮
+    - 操作按钮区：开始/停止扫描、导出报告
+    - 进度显示区：进度条、当前阶段、存活主机计数
+    - 结果展示区：扫描结果表格、日志面板、汇总统计
+    """
     def __init__(self):
         super().__init__()
         self.setWindowTitle("NetLens - LAN 代理服务暴露检测工具")
@@ -407,9 +448,10 @@ class MainWindow(QMainWindow):
         self._refresh_proxy_status()
         self._log("NetLens 启动完成，准备就绪。")
 
-    # ── UI construction ──────────────────────────────────────────
+    # ── UI 构建 ──────────────────────────────────────────────────
 
     def _build_ui(self):
+        """构建整个 UI 布局。"""
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
@@ -650,9 +692,10 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self._status)
         self._status.showMessage("就绪")
 
-    # ── Style ────────────────────────────────────────────────────
+    # ── 样式 ─────────────────────────────────────────────────────
 
     def _apply_style(self):
+        """应用 Catppuccin Mocha 暗色主题样式。"""
         self.setStyleSheet("""
             QMainWindow { background: #1e1e2e; }
             QGroupBox {
@@ -714,9 +757,10 @@ class MainWindow(QMainWindow):
             QStatusBar { color: #a6adc8; background: #181825; }
         """)
 
-    # ── Actions ──────────────────────────────────────────────────
+    # ── 操作方法 ─────────────────────────────────────────────────
 
     def _parse_ports(self) -> list[int]:
+        """解析端口输入框中的端口号列表。自动过滤无效端口（<1 或 >65535）。"""
         text = self._ports_input.text()
         ports = []
         for part in text.split(","):
@@ -770,12 +814,13 @@ class MainWindow(QMainWindow):
         self._log(f"使用本机子网: {subnet}")
 
     def _campus_scan(self):
-        """Quick campus scan — use the /16 mode and start immediately."""
-        self._scan_mode.setCurrentIndex(1)  # campus /16
-        self._chk_two_phase.setChecked(True)
+        """校园网快速扫描：自动选择 /16 模式并立即开始扫描。"""
+        self._scan_mode.setCurrentIndex(1)  # 切换到校园网段 (/16) 模式
+        self._chk_two_phase.setChecked(True)  # 自动启用两阶段扫描
         self._start_scan()
 
     def _start_scan(self):
+        """开始扫描：解析输入、配置引擎、启动工作线程。"""
         targets = self._parse_targets()
         if not targets:
             QMessageBox.warning(self, "无目标", "请至少输入一个 IP 地址或子网。")
@@ -786,10 +831,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "无端口", "请至少输入一个端口号。")
             return
 
-        # auto-enable two-phase for large networks
-        two_phase = self._chk_two_phase.isChecked() or len(targets) > 256  # matches ScanConfig.two_phase_threshold
+        # 目标超过 256 个时自动启用两阶段扫描（与 ScanConfig.two_phase_threshold 一致）
+        two_phase = self._chk_two_phase.isChecked() or len(targets) > 256
 
-        # configure engine
+        # 配置扫描引擎
         config = ScanConfig(
             ports=ports,
             timeout=self._timeout_spin.value(),
@@ -838,34 +883,39 @@ class MainWindow(QMainWindow):
         self._worker.start()
 
     def _stop_scan(self):
+        """停止当前扫描。"""
         if self._worker and self._worker.isRunning():
             self._engine.stop()
             self._log("用户停止扫描。")
             self._status.showMessage("已停止")
 
     def _on_phase_change(self, phase: str):
+        """扫描阶段切换回调：更新进度条和阶段标签。"""
         self._current_phase = phase
         if phase == "discovery":
             self._lbl_phase.setText("阶段: 主机发现")
             self._log("--- 阶段一: 主机发现 ---")
         elif phase == "scan":
             self._lbl_phase.setText("阶段: 深度扫描")
-            # reset progress for scan phase
+            # 重置进度条为深度扫描的任务总数
             scan_total = self._alive_count * len(self._parse_ports())
             self._progress.setMaximum(max(scan_total, 1))
             self._progress.setValue(0)
             self._log(f"--- 阶段二: 深度扫描 ({self._alive_count} 台存活主机) ---")
 
     def _on_alive_found(self, ip: str):
+        """发现存活主机回调：更新存活主机计数。"""
         self._alive_count += 1
         self._lbl_alive.setText(f"存活: {self._alive_count}")
 
     def _on_result(self, result: ScanResult):
+        """单个扫描结果回调：保存结果，仅将开放端口加入表格（提升大规模扫描性能）。"""
         self._results.append(result)
         if result.is_open:
             self._add_table_row(result)
 
     def _on_progress(self, done: int, total: int):
+        """进度回调：更新进度条数值和显示格式。"""
         self._progress.setValue(done)
         if self._current_phase == "discovery":
             self._progress.setFormat(f"发现中: {done}/{total}")
@@ -873,9 +923,10 @@ class MainWindow(QMainWindow):
             self._progress.setFormat(f"{done}/{total} ({100*done//max(total,1)}%)")
 
     def _on_proxy_found(self, result: ScanResult):
+        """发现代理回调：保存到记忆 + 启动后台连通性测试（不弹窗）。"""
         self._log(f"*** 发现代理: {result.ip}:{result.port} ({result.proxy_type.display_name()}) ***")
 
-        # save to memory immediately
+        # 立即保存到代理记忆（无论连通性测试结果如何）
         self._memory.add_or_update(
             result.ip, result.port,
             proxy_type=result.proxy_type.display_name(),
@@ -884,7 +935,7 @@ class MainWindow(QMainWindow):
         )
         self._found_proxies.append(result)
 
-        # run connectivity test in background thread to avoid blocking UI
+        # 在后台线程中执行连通性测试，避免阻塞 UI
         if not result.connectivity_ok and result.proxy_type not in (ProxyType.NONE, ProxyType.UNKNOWN):
             worker = ProxyTestWorker(result, self._timeout_spin.value())
             worker.finished.connect(self._on_connectivity_test_done)
@@ -894,13 +945,14 @@ class MainWindow(QMainWindow):
             self._log(f"    已保存到记忆")
 
     def _on_connectivity_test_done(self, result: ScanResult, ok: bool):
-        """Called when background connectivity test finishes — just update, no popup."""
+        """连通性测试完成回调：更新结果状态，不弹窗（扫描结束后统一汇总）。"""
         result.connectivity_ok = ok
         result.connectivity_tested = True
         if ok:
             self._log(f"    代理已验证: 流量转发成功 (已保存到记忆)")
         else:
             self._log(f"    代理未通过验证 (已保存到记忆)")
+        # 清理已完成的测试线程引用
         self._test_workers = [w for w in self._test_workers if w.isRunning()]
 
     def _apply_selected_proxy(self):
@@ -952,6 +1004,7 @@ class MainWindow(QMainWindow):
         self._refresh_proxy_status()
 
     def _on_scan_finished(self):
+        """扫描完成回调：更新 UI 状态，显示汇总，弹出代理选择对话框。"""
         self._btn_start.setEnabled(True)
         self._btn_campus_scan.setEnabled(True)
         self._btn_stop.setEnabled(False)
@@ -960,16 +1013,17 @@ class MainWindow(QMainWindow):
         self._status.showMessage(f"扫描完成 -- {len(self._results)} 条结果, {self._alive_count} 台存活主机, 耗时 {duration:.1f} 秒")
         self._log(f"扫描完成。{len(self._results)} 条结果, {self._alive_count} 台存活主机, 耗时 {duration:.1f} 秒")
 
+        # 生成并显示汇总统计
         summary = self._reporter.summarize(self._results, duration)
         self._show_summary(summary)
 
-        # show proxy summary dialog if any proxies were found
+        # 如果发现了代理，延迟弹出汇总选择对话框（延迟 300ms 确保 UI 刷新完成）
         if self._found_proxies:
             self._log(f"发现 {len(self._found_proxies)} 个代理，弹出汇总选择窗口")
             QTimer.singleShot(300, self._show_scan_summary_dialog)
 
     def _show_scan_summary_dialog(self):
-        """Show summary dialog with all found proxies after scan completes."""
+        """显示扫描完成后的代理汇总选择对话框。"""
         dlg = ScanSummaryDialog(self._found_proxies, self)
         dlg.exec()
         if dlg.chosen:
@@ -1004,9 +1058,10 @@ class MainWindow(QMainWindow):
         lines.append("=" * 50)
         self._summary_view.setPlainText("\n".join(lines))
 
-    # ── Table ────────────────────────────────────────────────────
+    # ── 结果表格 ─────────────────────────────────────────────────
 
     def _add_table_row(self, r: ScanResult):
+        """将一条扫描结果添加到结果表格中。仅调用方确认 is_open=True 时才调用。"""
         row = self._table.rowCount()
         self._table.insertRow(row)
 
@@ -1043,6 +1098,7 @@ class MainWindow(QMainWindow):
             self._table.setItem(row, col, item)
 
     def _on_table_selection_changed(self):
+        """表格选择变化回调：仅当选中行为代理类型时启用"应用到系统"按钮。"""
         row = self._table.currentRow()
         if row < 0:
             self._btn_proxy_on.setEnabled(False)
@@ -1053,9 +1109,10 @@ class MainWindow(QMainWindow):
         else:
             self._btn_proxy_on.setEnabled(False)
 
-    # ── Export ───────────────────────────────────────────────────
+    # ── 导出 ─────────────────────────────────────────────────────
 
     def _export(self, fmt: str):
+        """将扫描结果导出为指定格式的文件。"""
         if not self._results:
             QMessageBox.information(self, "无数据", "没有扫描结果可导出。")
             return
@@ -1083,9 +1140,10 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "导出错误", str(e))
 
-    # ── Logging ──────────────────────────────────────────────────
+    # ── 日志 ─────────────────────────────────────────────────────
 
     def _log(self, msg: str):
+        """记录日志：同时写入日志文件和 UI 日志面板。"""
         self._logger.info(msg)
         timestamp = datetime.now().strftime("%H:%M:%S")
         self._log_view.append(f"[{timestamp}] {msg}")
@@ -1093,14 +1151,19 @@ class MainWindow(QMainWindow):
         cursor.movePosition(QTextCursor.End)
         self._log_view.setTextCursor(cursor)
 
-    # ── Close ────────────────────────────────────────────────────
+    # ── 关闭 ─────────────────────────────────────────────────────
 
     def closeEvent(self, event):
-        self.hide()  # hide window immediately for responsive feel
+        """窗口关闭事件处理：停止后台线程，关闭日志文件。"""
+        # 先隐藏窗口，让用户感觉响应迅速
+        self.hide()
+        # 等待扫描线程结束（最多 10 秒）
         if self._worker and self._worker.isRunning():
             self._engine.stop()
             self._worker.wait(10000)
+        # 等待所有连通性测试线程结束（每个最多 2 秒）
         for w in self._test_workers:
             w.wait(2000)
+        # 关闭日志文件句柄
         self._logger.close()
         event.accept()
