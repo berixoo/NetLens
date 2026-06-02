@@ -1,9 +1,7 @@
-#!/usr/bin/env python3
-"""NetLens — LAN Proxy Service Exposure Detection Tool.
+"""NetLens — LAN 代理服务暴露检测工具。
 
-Usage:
-    python app.py              # Launch GUI
-    python app.py --cli ...    # Run headless CLI scan (future)
+使用方式：
+    python app.py
 """
 from __future__ import annotations
 
