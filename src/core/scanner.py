@@ -381,6 +381,10 @@ class ScannerEngine:
             return []
 
         with self._lock:
+            # 在清除取消事件前，先检查是否已被用户停止
+            if self._state == ScanState.STOPPED:
+                self._finish()
+                return self.results
             if self._state == ScanState.IDLE:
                 self._state = ScanState.SCANNING
             if phase == "scan":

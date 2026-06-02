@@ -274,6 +274,10 @@ def ip_range_count(input_str: str) -> int:
             right = parts[1].strip()
             if right.isdigit():
                 left = parts[0].strip()
+                try:
+                    ipaddress.IPv4Address(left)
+                except (ValueError, ipaddress.AddressValueError):
+                    continue
                 start = int(left.split(".")[-1])
                 end = int(right)
                 total += max(0, end - start + 1)
