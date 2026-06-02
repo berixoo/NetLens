@@ -8,3 +8,4 @@ build/
 .venv/
 venv/
 proxy_memory.json
+*.spec

@@ -5,6 +5,7 @@
   <img src="https://img.shields.io/badge/PySide6-6.5+-green?style=for-the-badge&logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/github/v/release/berixoo/NetLens?style=for-the-badge&label=Release" alt="Release">
 </p>
 
 <p align="center">
@@ -32,15 +33,16 @@
 
 ## 快速开始
 
+### 方式一：下载可执行文件（推荐）
+
+从 [Releases](https://github.com/berixoo/NetLens/releases) 下载 `NetLens.exe`，直接运行即可，无需安装 Python。
+
+### 方式二：从源码运行
+
 ```bash
-# 克隆仓库
 git clone https://github.com/berixoo/NetLens.git
 cd NetLens
-
-# 安装依赖
 pip install -r requirements.txt
-
-# 启动
 python app.py
 ```
 
