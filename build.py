@@ -12,6 +12,7 @@ PyInstaller.__main__.run([
     "--windowed",
     "--noconfirm",
     "--clean",
+    f"--icon={os.path.join(ROOT, 'media_1773652121.ico')}",
     f"--workpath={os.path.join(ROOT, 'build')}",
     f"--distpath={os.path.join(ROOT, 'dist')}",
     f"--specpath={ROOT}",
